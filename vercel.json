@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "functions": {
+    "api/duration.js": {
+      "runtime": "edge"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/duration",
+      "destination": "/api/duration.js"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/health.js"
+    },
+    {
+      "source": "/",
+      "destination": "/api/index.js"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-API-Token"
+        },
+        {
+          "key": "Access-Control-Max-Age",
+          "value": "86400"
+        }
+      ]
+    }
+  ],
+  "env": {
+    "API_TOKEN": "@api_token"
+  }
+}

@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Online Audio Duration API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #ddd;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            background: #f9f9f9;
+            transition: all 0.3s ease;
+        }
+        .upload-area:hover {
+            border-color: #007bff;
+            background: #f0f8ff;
+        }
+        .upload-area.dragover {
+            border-color: #28a745;
+            background: #f0fff0;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .upload-btn {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        .upload-btn:hover {
+            background: #0056b3;
+        }
+        .precision-options {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .precision-options label {
+            margin: 0 15px;
+            cursor: pointer;
+        }
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            display: none;
+        }
+        .result-item {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background: #fff5f5;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        .api-info {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-online {
+            background: #28a745;
+        }
+        .status-offline {
+            background: #dc3545;
+        }
+        pre {
+            background: #f1f1f1;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .deployment-info {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .deployment-info h3 {
+            color: #155724;
+            margin-top: 0;
+        }
+        .api-links {
+            margin: 10px 0;
+        }
+        .api-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin-right: 15px;
+        }
+        .api-links a:hover {
+            text-decoration: underline;
+        }
+        .token-input {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .token-input label {
+            display: block;
+            margin-bottom: 5px;
+            color: #856404;
+        }
+        .token-input input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        .token-input input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 5px rgba(0,123,255,0.3);
+        }
+        .token-input small {
+            color: #856404;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 Online Audio Duration API Test</h1>
+        
+        <div class="deployment-info">
+            <h3>🚀 部署成功！</h3>
+            <p><strong>API已成功部署到Cloudflare Workers</strong></p>
+            <div class="api-links">
+                <a href="https://audio-duration-api.two-ice.workers.dev" target="_blank">📖 API文档</a>
+                <a href="https://audio-duration-api.two-ice.workers.dev/health" target="_blank">💚 健康检查</a>
+            </div>
+        </div>
+        
+        <div class="api-info">
+            <p><span class="status-indicator" id="statusIndicator"></span>
+            <strong>API状态:</strong> <span id="apiStatus">检查中...</span></p>
+            <strong>API Endpoint:</strong> <code id="api-endpoint">https://audio-duration-api.two-ice.workers.dev/api/duration</code>
+            <br><br>
+            <strong>支持格式:</strong> MP3, WAV, OGG, AAC, FLAC, WebM, M4A
+            <br>
+            <strong>最大文件大小:</strong> 50MB
+        </div>
+        
+        <div class="token-input">
+            <label for="tokenInput"><strong>🔐 API Token (可选):</strong></label>
+            <input type="text" id="tokenInput" placeholder="输入API Token (如: demo-token-12345)" style="width: 100%; padding: 8px; margin: 5px 0; border: 1px solid #ddd; border-radius: 4px;">
+            <small style="color: #666;">如果API启用了token认证，请输入有效的token</small>
+        </div>
+        
+        <div class="precision-options">
+            <label>
+                <input type="radio" name="precision" value="simple" checked>
+                简单格式 (MM:SS)
+            </label>
+            <label>
+                <input type="radio" name="precision" value="precise">
+                微秒精度 (HH:MM:SS.SSSSSS)
+            </label>
+        </div>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>📁 拖拽音频文件到这里，或点击选择文件</p>
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+                选择音频文件
+            </button>
+            <input type="file" id="fileInput" accept="audio/*" multiple>
+        </div>
+        
+        <div class="results" id="results">
+            <h3>检测结果:</h3>
+            <div id="resultList"></div>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const results = document.getElementById('results');
+        const resultList = document.getElementById('resultList');
+        const apiEndpoint = document.getElementById('api-endpoint').textContent;
+        const statusIndicator = document.getElementById('statusIndicator');
+        const apiStatus = document.getElementById('apiStatus');
+
+        // 拖拽事件
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('audio/'));
+            if (files.length > 0) {
+                processFiles(files);
+            } else {
+                alert('请选择音频文件！');
+            }
+        });
+
+        // 文件选择事件
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length > 0) {
+                processFiles(files);
+            }
+        });
+
+        // 处理文件
+        async function processFiles(files) {
+            results.style.display = 'block';
+            resultList.innerHTML = '<div class="loading">正在调用在线API分析音频文件...</div>';
+            
+            const fileResults = [];
+            const precision = document.querySelector('input[name="precision"]:checked').value;
+            
+            for (const file of files) {
+                try {
+                    const result = await callAudioDurationAPI(file, precision);
+                    fileResults.push({
+                        name: file.name,
+                        success: true,
+                        data: result.data,
+                        response: result
+                    });
+                } catch (error) {
+                    fileResults.push({
+                        name: file.name,
+                        success: false,
+                        error: error.message,
+                        details: error.details
+                    });
+                }
+            }
+            
+            displayResults(fileResults);
+        }
+
+        // 调用API
+        async function callAudioDurationAPI(file, precision) {
+            const formData = new FormData();
+            formData.append('audio', file);
+            formData.append('precision', precision);
+
+            // 获取token输入值
+            const token = document.getElementById('tokenInput').value.trim();
+            
+            // 构建请求头
+            const headers = {};
+            if (token) {
+                headers['X-API-Token'] = token;
+            }
+
+            const response = await fetch(apiEndpoint, {
+                method: 'POST',
+                headers: headers,
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                let errorMessage = result.message || `HTTP ${response.status}`;
+                if (response.status === 401) {
+                    errorMessage = '🔐 Token认证失败，请检查token是否正确或联系管理员';
+                }
+                throw new Error(errorMessage, {
+                    details: result
+                });
+            }
+
+            if (!result.success) {
+                throw new Error(result.message || 'API调用失败', {
+                    details: result
+                });
+            }
+
+            return result;
+        }
+
+        // 显示结果
+        function displayResults(fileResults) {
+            resultList.innerHTML = '';
+            
+            fileResults.forEach(result => {
+                const resultItem = document.createElement('div');
+                resultItem.className = result.success ? 'result-item' : 'result-item error';
+                
+                if (result.success) {
+                    const data = result.data;
+                    const durationSeconds = (data.duration / 1000000).toFixed(6);
+                    resultItem.innerHTML = `
+                        <h4>📄 ${result.name}</h4>
+                        <p><strong>文件大小:</strong> ${data.fileSize}</p>
+                        <p><strong>MIME类型:</strong> ${data.mimeType}</p>
+                        <p><strong>格式化时长:</strong> ${data.formatted}</p>
+                        <p><strong>时长(微秒):</strong> ${data.duration.toLocaleString()}</p>
+                        <p><strong>时长(秒):</strong> ${durationSeconds} 秒</p>
+                        <p><strong>精度模式:</strong> ${data.precision}</p>
+                        <p><strong>时间轴:</strong> ${data.timelines[0].start} - ${data.timelines[0].end} 微秒</p>
+                        <p><strong>处理时间:</strong> ${data.timestamp}</p>
+                        <details>
+                            <summary>完整API响应</summary>
+                            <pre>${JSON.stringify(result.response, null, 2)}</pre>
+                        </details>
+                    `;
+                } else {
+                    resultItem.innerHTML = `
+                        <h4>📄 ${result.name}</h4>
+                        <p><strong>❌ 错误:</strong> ${result.error}</p>
+                        ${result.details ? `
+                        <details>
+                            <summary>错误详情</summary>
+                            <pre>${JSON.stringify(result.details, null, 2)}</pre>
+                        </details>
+                        ` : ''}
+                    `;
+                }
+                
+                resultList.appendChild(resultItem);
+            });
+        }
+
+        // 检查API状态
+        async function checkApiStatus() {
+            try {
+                const response = await fetch('https://audio-duration-api.two-ice.workers.dev/health');
+                const result = await response.json();
+                
+                if (response.ok && result.status === 'ok') {
+                    statusIndicator.className = 'status-indicator status-online';
+                    apiStatus.textContent = '在线 ✅';
+                    console.log('API健康检查:', result);
+                } else {
+                    throw new Error('API响应异常');
+                }
+            } catch (error) {
+                statusIndicator.className = 'status-indicator status-offline';
+                apiStatus.textContent = '离线 ❌';
+                console.error('API连接失败:', error);
+            }
+        }
+
+        // 页面加载时检查API状态
+        window.addEventListener('load', () => {
+            checkApiStatus();
+            
+            // 每30秒检查一次API状态
+            setInterval(checkApiStatus, 30000);
+        });
+    </script>
+</body>
+</html>

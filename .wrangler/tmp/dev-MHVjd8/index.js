@@ -1,0 +1,746 @@
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+
+// .wrangler/tmp/bundle-PhPgmf/checked-fetch.js
+var urls = /* @__PURE__ */ new Set();
+function checkURL(request, init) {
+  const url = request instanceof URL ? request : new URL(
+    (typeof request === "string" ? new Request(request, init) : request).url
+  );
+  if (url.port && url.port !== "443" && url.protocol === "https:") {
+    if (!urls.has(url.toString())) {
+      urls.add(url.toString());
+      console.warn(
+        `WARNING: known issue with \`fetch()\` requests to custom HTTPS ports in published Workers:
+ - ${url.toString()} - the custom port will be ignored when the Worker is published using the \`wrangler deploy\` command.
+`
+      );
+    }
+  }
+}
+__name(checkURL, "checkURL");
+globalThis.fetch = new Proxy(globalThis.fetch, {
+  apply(target, thisArg, argArray) {
+    const [request, init] = argArray;
+    checkURL(request, init);
+    return Reflect.apply(target, thisArg, argArray);
+  }
+});
+
+// .wrangler/tmp/bundle-PhPgmf/strip-cf-connecting-ip-header.js
+function stripCfConnectingIPHeader(input, init) {
+  const request = new Request(input, init);
+  request.headers.delete("CF-Connecting-IP");
+  return request;
+}
+__name(stripCfConnectingIPHeader, "stripCfConnectingIPHeader");
+globalThis.fetch = new Proxy(globalThis.fetch, {
+  apply(target, thisArg, argArray) {
+    return Reflect.apply(target, thisArg, [
+      stripCfConnectingIPHeader.apply(null, argArray)
+    ]);
+  }
+});
+
+// src/index.js
+var corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Token",
+  "Access-Control-Max-Age": "86400"
+};
+var SUPPORTED_FORMATS = [
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/wave",
+  "audio/ogg",
+  "audio/vorbis",
+  "audio/aac",
+  "audio/mp4",
+  "audio/flac",
+  "audio/x-flac",
+  "audio/webm",
+  "audio/x-m4a"
+];
+var src_default = {
+  async fetch(request, env, ctx) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 200,
+        headers: corsHeaders
+      });
+    }
+    const url = new URL(request.url);
+    const path = url.pathname;
+    try {
+      if (path === "/api/duration" && request.method === "POST") {
+        const authResult = await validateToken(request, env);
+        if (!authResult.valid) {
+          return new Response(JSON.stringify({
+            error: "Unauthorized",
+            message: authResult.message
+          }), {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+              ...corsHeaders
+            }
+          });
+        }
+        return await handleAudioDuration(request);
+      }
+      if (path === "/" && request.method === "GET") {
+        return new Response(getApiDocumentation(), {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            ...corsHeaders
+          }
+        });
+      }
+      if (path === "/health" && request.method === "GET") {
+        return new Response(JSON.stringify({
+          status: "ok",
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          service: "audio-duration-api"
+        }), {
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders
+          }
+        });
+      }
+      return new Response(JSON.stringify({
+        error: "Not Found",
+        message: "API endpoint not found",
+        availableEndpoints: [
+          "POST /api/duration - \u83B7\u53D6\u97F3\u9891\u65F6\u957F",
+          "GET /health - \u5065\u5EB7\u68C0\u67E5",
+          "GET / - API\u6587\u6863"
+        ]
+      }), {
+        status: 404,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      });
+    } catch (error) {
+      console.error("API Error:", error);
+      return new Response(JSON.stringify({
+        error: "Internal Server Error",
+        message: error.message
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      });
+    }
+  }
+};
+async function handleAudioDuration(request) {
+  try {
+    const contentType = request.headers.get("content-type") || "";
+    if (!contentType.includes("multipart/form-data")) {
+      return new Response(JSON.stringify({
+        error: "Bad Request",
+        message: "Content-Type must be multipart/form-data"
+      }), {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      });
+    }
+    const formData = await request.formData();
+    const audioFile = formData.get("audio");
+    const precisionMode = formData.get("precision") || "simple";
+    if (!audioFile || !(audioFile instanceof File)) {
+      return new Response(JSON.stringify({
+        error: "Bad Request",
+        message: 'No audio file provided. Please upload a file with field name "audio"'
+      }), {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      });
+    }
+    if (!SUPPORTED_FORMATS.includes(audioFile.type)) {
+      return new Response(JSON.stringify({
+        error: "Unsupported Format",
+        message: `Unsupported audio format: ${audioFile.type}`,
+        supportedFormats: SUPPORTED_FORMATS
+      }), {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      });
+    }
+    const maxSize = 50 * 1024 * 1024;
+    if (audioFile.size > maxSize) {
+      return new Response(JSON.stringify({
+        error: "File Too Large",
+        message: `File size exceeds limit. Maximum allowed: ${formatFileSize(maxSize)}`,
+        fileSize: formatFileSize(audioFile.size)
+      }), {
+        status: 413,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders
+        }
+      });
+    }
+    const duration = await getAudioDuration(audioFile);
+    const durationMicroseconds = Math.round(duration * 1e6);
+    const formattedDuration = formatDuration(duration, precisionMode);
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        filename: audioFile.name,
+        fileSize: formatFileSize(audioFile.size),
+        mimeType: audioFile.type,
+        duration: durationMicroseconds,
+        // 微秒格式的时长
+        formatted: formattedDuration,
+        // 格式化后的时长字符串
+        precision: precisionMode,
+        timelines: [
+          {
+            start: 0,
+            end: durationMicroseconds
+          }
+        ],
+        all_timelines: [
+          {
+            start: 0,
+            end: durationMicroseconds
+          }
+        ],
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      }
+    }), {
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      }
+    });
+  } catch (error) {
+    console.error("Audio processing error:", error);
+    return new Response(JSON.stringify({
+      error: "Processing Error",
+      message: error.message || "Failed to process audio file"
+    }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      }
+    });
+  }
+}
+__name(handleAudioDuration, "handleAudioDuration");
+async function getAudioDuration(file) {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    if (file.type.includes("mp3") || file.type.includes("mpeg")) {
+      return await parseMp3Duration(arrayBuffer);
+    } else if (file.type.includes("wav")) {
+      return await parseWavDuration(arrayBuffer);
+    } else if (file.type.includes("ogg")) {
+      return await parseOggDuration(arrayBuffer);
+    } else {
+      return await parseGenericAudioDuration(arrayBuffer, file.type);
+    }
+  } catch (error) {
+    throw new Error(`Failed to parse audio duration: ${error.message}`);
+  }
+}
+__name(getAudioDuration, "getAudioDuration");
+async function parseMp3Duration(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  for (let i = 0; i < view.byteLength - 4; i++) {
+    if (view.getUint8(i) === 255 && (view.getUint8(i + 1) & 224) === 224) {
+      const header = view.getUint32(i, false);
+      const frameInfo = parseMp3FrameHeader(header);
+      if (frameInfo) {
+        const bitrate = frameInfo.bitrate;
+        const fileSize = arrayBuffer.byteLength;
+        const duration = fileSize / (bitrate / 8);
+        return duration;
+      }
+    }
+  }
+  throw new Error("Invalid MP3 file format");
+}
+__name(parseMp3Duration, "parseMp3Duration");
+async function parseWavDuration(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  const riff = String.fromCharCode(...new Uint8Array(arrayBuffer, 0, 4));
+  const wave = String.fromCharCode(...new Uint8Array(arrayBuffer, 8, 4));
+  if (riff !== "RIFF" || wave !== "WAVE") {
+    throw new Error("Invalid WAV file format");
+  }
+  let offset = 12;
+  while (offset < view.byteLength - 8) {
+    const chunkId = String.fromCharCode(...new Uint8Array(arrayBuffer, offset, 4));
+    const chunkSize = view.getUint32(offset + 4, true);
+    if (chunkId === "fmt ") {
+      const sampleRate = view.getUint32(offset + 12, true);
+      const byteRate = view.getUint32(offset + 16, true);
+      let dataOffset = offset + 8 + chunkSize;
+      while (dataOffset < view.byteLength - 8) {
+        const dataChunkId = String.fromCharCode(...new Uint8Array(arrayBuffer, dataOffset, 4));
+        const dataChunkSize = view.getUint32(dataOffset + 4, true);
+        if (dataChunkId === "data") {
+          const duration = dataChunkSize / byteRate;
+          return duration;
+        }
+        dataOffset += 8 + dataChunkSize;
+      }
+      break;
+    }
+    offset += 8 + chunkSize;
+  }
+  throw new Error("Invalid WAV file structure");
+}
+__name(parseWavDuration, "parseWavDuration");
+async function parseOggDuration(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  const oggSignature = String.fromCharCode(...new Uint8Array(arrayBuffer, 0, 4));
+  if (oggSignature !== "OggS") {
+    throw new Error("Invalid OGG file format");
+  }
+  const estimatedBitrate = 128e3;
+  const fileSize = arrayBuffer.byteLength;
+  const duration = fileSize / (estimatedBitrate / 8);
+  return duration;
+}
+__name(parseOggDuration, "parseOggDuration");
+async function parseGenericAudioDuration(arrayBuffer, mimeType) {
+  let estimatedBitrate;
+  if (mimeType.includes("flac")) {
+    estimatedBitrate = 1e6;
+  } else if (mimeType.includes("aac") || mimeType.includes("m4a")) {
+    estimatedBitrate = 128e3;
+  } else {
+    estimatedBitrate = 192e3;
+  }
+  const fileSize = arrayBuffer.byteLength;
+  const duration = fileSize / (estimatedBitrate / 8);
+  return duration;
+}
+__name(parseGenericAudioDuration, "parseGenericAudioDuration");
+function parseMp3FrameHeader(header) {
+  const version = header >> 19 & 3;
+  const layer = header >> 17 & 3;
+  const bitrateIndex = header >> 12 & 15;
+  const sampleRateIndex = header >> 10 & 3;
+  const bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+  const sampleRates = [44100, 48e3, 32e3, 0];
+  if (bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+    return null;
+  }
+  const bitrate = bitrates[bitrateIndex];
+  const sampleRate = sampleRates[sampleRateIndex];
+  return {
+    bitrate: bitrate * 1e3,
+    sampleRate,
+    frameSize: Math.floor(144 * bitrate * 1e3 / sampleRate)
+  };
+}
+__name(parseMp3FrameHeader, "parseMp3FrameHeader");
+function formatFileSize(bytes) {
+  if (bytes === 0)
+    return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+__name(formatFileSize, "formatFileSize");
+function formatDuration(seconds, precisionMode = "simple") {
+  if (precisionMode === "precise") {
+    return formatDurationPrecise(seconds);
+  } else {
+    return formatDurationSimple(seconds);
+  }
+}
+__name(formatDuration, "formatDuration");
+function formatDurationSimple(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const secs = Math.floor(seconds % 60);
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  } else {
+    return `${minutes}:${secs.toString().padStart(2, "0")}`;
+  }
+}
+__name(formatDurationSimple, "formatDurationSimple");
+function formatDurationPrecise(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const wholeSecs = Math.floor(seconds % 60);
+  const microseconds = Math.floor(seconds % 1 * 1e6);
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${wholeSecs.toString().padStart(2, "0")}.${microseconds.toString().padStart(6, "0")}`;
+}
+__name(formatDurationPrecise, "formatDurationPrecise");
+function getApiDocumentation() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Duration API Documentation</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .method { background: #007bff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px; }
+        .method.post { background: #28a745; }
+        .method.get { background: #17a2b8; }
+        code { background: #f8f9fa; padding: 2px 4px; border-radius: 3px; }
+        pre { background: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>\u{1F3B5} Audio Duration API</h1>
+    <p>\u57FA\u4E8EHTML\u5DE5\u5177\u79FB\u690D\u7684\u97F3\u9891\u65F6\u957F\u68C0\u6D4BAPI\u670D\u52A1</p>
+    
+    <div class="endpoint">
+        <h3><span class="method post">POST</span> /api/duration</h3>
+        <p>\u4E0A\u4F20\u97F3\u9891\u6587\u4EF6\u5E76\u83B7\u53D6\u65F6\u957F\u4FE1\u606F\uFF08\u5FAE\u79D2\u7CBE\u5EA6\uFF09</p>
+        
+        <h4>\u{1F510} \u8BA4\u8BC1\u8981\u6C42\uFF1A</h4>
+        <p>\u6B64\u63A5\u53E3\u9700\u8981API Token\u8BA4\u8BC1\u3002\u8BF7\u5728\u8BF7\u6C42\u5934\u4E2D\u63D0\u4F9B\u4EE5\u4E0B\u4EFB\u4E00\u65B9\u5F0F\uFF1A</p>
+        <ul>
+            <li><code>Authorization: Bearer your-token</code></li>
+            <li><code>X-API-Token: your-token</code></li>
+        </ul>
+        
+        <h4>\u8BF7\u6C42\u53C2\u6570\uFF1A</h4>
+        <ul>
+            <li><code>audio</code> (file, required): \u97F3\u9891\u6587\u4EF6</li>
+            <li><code>precision</code> (string, optional): \u7CBE\u5EA6\u6A21\u5F0F\uFF0C"simple" \u6216 "precise"\uFF0C\u9ED8\u8BA4\u4E3A "simple"</li>
+        </ul>
+        
+        <h4>\u652F\u6301\u7684\u97F3\u9891\u683C\u5F0F\uFF1A</h4>
+        <p>MP3, WAV, OGG, AAC, FLAC, WebM, M4A</p>
+        
+        <h4>\u8FD4\u56DE\u6570\u636E\u8BF4\u660E\uFF1A</h4>
+        <ul>
+            <li><code>duration</code>: \u97F3\u9891\u65F6\u957F\uFF08\u5FAE\u79D2\uFF09\uFF0C1\u79D2 = 1000000\u5FAE\u79D2</li>
+            <li><code>formatted</code>: \u683C\u5F0F\u5316\u7684\u65F6\u957F\u5B57\u7B26\u4E32</li>
+            <li><code>timelines</code>: \u97F3\u9891\u65F6\u95F4\u8F74\u6570\u7EC4\uFF0C\u5305\u542Bstart\u548Cend\uFF08\u5FAE\u79D2\uFF09</li>
+            <li><code>all_timelines</code>: \u603B\u65F6\u957F\u65F6\u95F4\u8F74\u6570\u7EC4</li>
+        </ul>
+        
+        <h4>\u54CD\u5E94\u793A\u4F8B\uFF1A</h4>
+        <pre>{
+  "success": true,
+  "data": {
+    "filename": "example.mp3",
+    "fileSize": "3.2 MB",
+    "mimeType": "audio/mpeg",
+    "duration": 185123456,
+    "formatted": "3:05",
+    "precision": "simple",
+    "timelines": [
+      {
+        "start": 0,
+        "end": 185123456
+      }
+    ],
+    "all_timelines": [
+      {
+        "start": 0,
+        "end": 185123456
+      }
+    ],
+    "timestamp": "2024-01-01T12:00:00.000Z"
+  }
+}</pre>
+    </div>
+    
+    <div class="endpoint">
+        <h3><span class="method get">GET</span> /health</h3>
+        <p>\u5065\u5EB7\u68C0\u67E5\u7AEF\u70B9</p>
+    </div>
+    
+    <h3>\u4F7F\u7528\u793A\u4F8B\uFF1A</h3>
+    <pre>// JavaScript fetch \u793A\u4F8B\uFF08\u4F7F\u7528Bearer Token\uFF09
+const formData = new FormData();
+formData.append('audio', audioFile);
+formData.append('precision', 'precise');
+
+fetch('/api/duration', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer your-api-token'
+  },
+  body: formData
+})
+.then(response => response.json())
+.then(data => console.log(data));</pre>
+    
+    <pre>// JavaScript fetch \u793A\u4F8B\uFF08\u4F7F\u7528X-API-Token\uFF09
+const formData = new FormData();
+formData.append('audio', audioFile);
+formData.append('precision', 'precise');
+
+fetch('/api/duration', {
+  method: 'POST',
+  headers: {
+    'X-API-Token': 'your-api-token'
+  },
+  body: formData
+})
+.then(response => response.json())
+.then(data => console.log(data));</pre>
+    
+    <pre># cURL \u793A\u4F8B\uFF08\u4F7F\u7528Bearer Token\uFF09
+curl -X POST   -H "Authorization: Bearer your-api-token"   -F "audio=@example.mp3"   -F "precision=precise"   https://your-worker.your-subdomain.workers.dev/api/duration</pre>
+  
+    <pre># cURL \u793A\u4F8B\uFF08\u4F7F\u7528X-API-Token\uFF09
+curl -X POST   -H "X-API-Token: your-api-token"   -F "audio=@example.mp3"   -F "precision=precise"   https://your-worker.your-subdomain.workers.dev/api/duration</pre>
+  
+    <h4>\u{1F527} Token\u914D\u7F6E\u8BF4\u660E\uFF1A</h4>
+    <p>\u7BA1\u7406\u5458\u53EF\u4EE5\u901A\u8FC7\u4EE5\u4E0B\u65B9\u5F0F\u914D\u7F6EAPI Token\uFF1A</p>
+    <ul>
+        <li>\u5728 <code>wrangler.toml</code> \u6587\u4EF6\u4E2D\u8BBE\u7F6E <code>API_TOKEN</code> \u53D8\u91CF</li>
+        <li>\u4F7F\u7528 <code>wrangler secret put API_TOKEN</code> \u547D\u4EE4\u5B89\u5168\u5730\u8BBE\u7F6Etoken\uFF08\u63A8\u8350\uFF09</li>
+    </ul>
+    
+    <h4>\u274C \u9519\u8BEF\u54CD\u5E94\u793A\u4F8B\uFF1A</h4>
+    <pre>// 401 Unauthorized - \u7F3A\u5C11token
+{
+  "error": "Unauthorized",
+  "message": "Missing API token. Please provide token in Authorization header (Bearer token) or X-API-Token header"
+}
+
+// 401 Unauthorized - token\u65E0\u6548
+{
+  "error": "Unauthorized",
+  "message": "Invalid API token"
+}</pre>
+</body>
+</html>`;
+}
+__name(getApiDocumentation, "getApiDocumentation");
+async function validateToken(request, env) {
+  const validToken = env.API_TOKEN;
+  if (!validToken) {
+    return {
+      valid: false,
+      message: "API token not configured on server"
+    };
+  }
+  const authHeader = request.headers.get("Authorization");
+  const apiTokenHeader = request.headers.get("X-API-Token");
+  let providedToken = null;
+  if (authHeader) {
+    if (authHeader.startsWith("Bearer ")) {
+      providedToken = authHeader.substring(7);
+    } else {
+      providedToken = authHeader;
+    }
+  } else if (apiTokenHeader) {
+    providedToken = apiTokenHeader;
+  }
+  if (!providedToken) {
+    return {
+      valid: false,
+      message: "Missing API token. Please provide token in Authorization header (Bearer token) or X-API-Token header"
+    };
+  }
+  if (providedToken !== validToken) {
+    return {
+      valid: false,
+      message: "Invalid API token"
+    };
+  }
+  return {
+    valid: true,
+    message: "Token validated successfully"
+  };
+}
+__name(validateToken, "validateToken");
+
+// node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
+var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } finally {
+    try {
+      if (request.body !== null && !request.bodyUsed) {
+        const reader = request.body.getReader();
+        while (!(await reader.read()).done) {
+        }
+      }
+    } catch (e) {
+      console.error("Failed to drain the unused request body.", e);
+    }
+  }
+}, "drainBody");
+var middleware_ensure_req_body_drained_default = drainBody;
+
+// node_modules/wrangler/templates/middleware/middleware-miniflare3-json-error.ts
+function reduceError(e) {
+  return {
+    name: e?.name,
+    message: e?.message ?? String(e),
+    stack: e?.stack,
+    cause: e?.cause === void 0 ? void 0 : reduceError(e.cause)
+  };
+}
+__name(reduceError, "reduceError");
+var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } catch (e) {
+    const error = reduceError(e);
+    return Response.json(error, {
+      status: 500,
+      headers: { "MF-Experimental-Error-Stack": "true" }
+    });
+  }
+}, "jsonError");
+var middleware_miniflare3_json_error_default = jsonError;
+
+// .wrangler/tmp/bundle-PhPgmf/middleware-insertion-facade.js
+var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
+  middleware_ensure_req_body_drained_default,
+  middleware_miniflare3_json_error_default
+];
+var middleware_insertion_facade_default = src_default;
+
+// node_modules/wrangler/templates/middleware/common.ts
+var __facade_middleware__ = [];
+function __facade_register__(...args) {
+  __facade_middleware__.push(...args.flat());
+}
+__name(__facade_register__, "__facade_register__");
+function __facade_invokeChain__(request, env, ctx, dispatch, middlewareChain) {
+  const [head, ...tail] = middlewareChain;
+  const middlewareCtx = {
+    dispatch,
+    next(newRequest, newEnv) {
+      return __facade_invokeChain__(newRequest, newEnv, ctx, dispatch, tail);
+    }
+  };
+  return head(request, env, ctx, middlewareCtx);
+}
+__name(__facade_invokeChain__, "__facade_invokeChain__");
+function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
+  return __facade_invokeChain__(request, env, ctx, dispatch, [
+    ...__facade_middleware__,
+    finalMiddleware
+  ]);
+}
+__name(__facade_invoke__, "__facade_invoke__");
+
+// .wrangler/tmp/bundle-PhPgmf/middleware-loader.entry.ts
+var __Facade_ScheduledController__ = class {
+  constructor(scheduledTime, cron, noRetry) {
+    this.scheduledTime = scheduledTime;
+    this.cron = cron;
+    this.#noRetry = noRetry;
+  }
+  #noRetry;
+  noRetry() {
+    if (!(this instanceof __Facade_ScheduledController__)) {
+      throw new TypeError("Illegal invocation");
+    }
+    this.#noRetry();
+  }
+};
+__name(__Facade_ScheduledController__, "__Facade_ScheduledController__");
+function wrapExportedHandler(worker) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return worker;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  const fetchDispatcher = /* @__PURE__ */ __name(function(request, env, ctx) {
+    if (worker.fetch === void 0) {
+      throw new Error("Handler does not export a fetch() function.");
+    }
+    return worker.fetch(request, env, ctx);
+  }, "fetchDispatcher");
+  return {
+    ...worker,
+    fetch(request, env, ctx) {
+      const dispatcher = /* @__PURE__ */ __name(function(type, init) {
+        if (type === "scheduled" && worker.scheduled !== void 0) {
+          const controller = new __Facade_ScheduledController__(
+            Date.now(),
+            init.cron ?? "",
+            () => {
+            }
+          );
+          return worker.scheduled(controller, env, ctx);
+        }
+      }, "dispatcher");
+      return __facade_invoke__(request, env, ctx, dispatcher, fetchDispatcher);
+    }
+  };
+}
+__name(wrapExportedHandler, "wrapExportedHandler");
+function wrapWorkerEntrypoint(klass) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return klass;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  return class extends klass {
+    #fetchDispatcher = (request, env, ctx) => {
+      this.env = env;
+      this.ctx = ctx;
+      if (super.fetch === void 0) {
+        throw new Error("Entrypoint class does not define a fetch() function.");
+      }
+      return super.fetch(request);
+    };
+    #dispatcher = (type, init) => {
+      if (type === "scheduled" && super.scheduled !== void 0) {
+        const controller = new __Facade_ScheduledController__(
+          Date.now(),
+          init.cron ?? "",
+          () => {
+          }
+        );
+        return super.scheduled(controller);
+      }
+    };
+    fetch(request) {
+      return __facade_invoke__(
+        request,
+        this.env,
+        this.ctx,
+        this.#dispatcher,
+        this.#fetchDispatcher
+      );
+    }
+  };
+}
+__name(wrapWorkerEntrypoint, "wrapWorkerEntrypoint");
+var WRAPPED_ENTRY;
+if (typeof middleware_insertion_facade_default === "object") {
+  WRAPPED_ENTRY = wrapExportedHandler(middleware_insertion_facade_default);
+} else if (typeof middleware_insertion_facade_default === "function") {
+  WRAPPED_ENTRY = wrapWorkerEntrypoint(middleware_insertion_facade_default);
+}
+var middleware_loader_entry_default = WRAPPED_ENTRY;
+export {
+  __INTERNAL_WRANGLER_MIDDLEWARE__,
+  middleware_loader_entry_default as default
+};
+//# sourceMappingURL=index.js.map

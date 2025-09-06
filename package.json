@@ -1,0 +1,35 @@
+{
+  "name": "audio-duration-api",
+  "version": "1.0.0",
+  "description": "Audio duration detection API service for Cloudflare Workers",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:vercel": "vercel dev",
+    "deploy": "wrangler deploy",
+    "deploy:vercel": "vercel --prod",
+    "build": "echo \"No build step required\"",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "audio",
+    "duration",
+    "api",
+    "cloudflare-workers",
+    "vercel",
+    "edge-functions",
+    "serverless"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0",
+    "vercel": "^32.0.0"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

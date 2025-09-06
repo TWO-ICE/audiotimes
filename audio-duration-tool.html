@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音频时长获取工具</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        h1 {
+            text-align: center;
+            color: #4a5568;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        .drop-zone {
+            border: 3px dashed #cbd5e0;
+            border-radius: 10px;
+            padding: 60px 20px;
+            text-align: center;
+            margin: 20px 0;
+            background: #f7fafc;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: #667eea;
+            background: #edf2f7;
+            transform: translateY(-2px);
+        }
+        .drop-zone p {
+            font-size: 1.2em;
+            color: #718096;
+            margin: 10px 0;
+        }
+        .file-input {
+            display: none;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            display: none;
+        }
+        .file-item {
+            background: white;
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .file-name {
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 5px;
+        }
+        .file-info {
+            color: #718096;
+            font-size: 0.9em;
+        }
+        .duration {
+            font-size: 1.2em;
+            color: #667eea;
+            font-weight: bold;
+        }
+        .error {
+            color: #e53e3e;
+            font-weight: bold;
+        }
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-style: italic;
+        }
+        .icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+        .precision-toggle {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .precision-toggle label {
+            margin: 0 10px;
+            color: #4a5568;
+            font-weight: bold;
+        }
+        .precision-toggle input[type="radio"] {
+            margin-right: 5px;
+        }
+        .duration-precise {
+            font-family: 'Courier New', monospace;
+            font-size: 1.1em;
+            color: #667eea;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 音频时长获取工具</h1>
+        <p style="text-align: center; color: #718096; margin-bottom: 30px;">拖拽音频文件到下方区域，或点击选择文件，即可获取音频时长信息</p>
+        
+        <div class="drop-zone" id="dropZone">
+            <div class="icon">📁</div>
+            <p><strong>拖拽音频文件到这里</strong></p>
+            <p>或者</p>
+            <button class="btn" onclick="document.getElementById('fileInput').click()">选择文件</button>
+            <p style="font-size: 0.9em; margin-top: 20px;">支持格式：MP3, WAV, M4A, AAC, OGG, FLAC</p>
+        </div>
+        
+        <input type="file" id="fileInput" class="file-input" multiple accept="audio/*">
+        
+        <div class="precision-toggle">
+            <label><input type="radio" name="precision" value="simple" checked> 简单格式 (MM:SS)</label>
+            <label><input type="radio" name="precision" value="precise"> 微秒精度 (HH:MM:SS.SSSSSS)</label>
+            <p style="font-size: 0.9em; color: #718096; margin-top: 10px;">💡 微秒精度模式：1秒 = 1,000,000微秒，显示精确到百万分之一秒</p>
+        </div>
+        
+        <div class="results" id="results">
+            <h3>📊 分析结果</h3>
+            <div id="fileList"></div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const results = document.getElementById('results');
+        const fileList = document.getElementById('fileList');
+
+        // 拖拽事件处理
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('audio/'));
+            if (files.length > 0) {
+                processFiles(files);
+            } else {
+                alert('请选择音频文件！');
+            }
+        });
+
+        // 文件选择事件
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length > 0) {
+                processFiles(files);
+            }
+        });
+        
+        // 精度切换事件
+        document.addEventListener('change', (e) => {
+            if (e.target.name === 'precision') {
+                // 如果已有结果，重新格式化显示
+                const existingResults = document.querySelectorAll('.file-item');
+                if (existingResults.length > 0) {
+                    // 重新处理当前文件（如果有的话）
+                    const currentFiles = fileInput.files;
+                    if (currentFiles.length > 0) {
+                        processFiles(Array.from(currentFiles));
+                    }
+                }
+            }
+        });
+
+        // 处理文件
+        async function processFiles(files) {
+            results.style.display = 'block';
+            fileList.innerHTML = '<div class="loading">正在分析音频文件...</div>';
+            
+            const fileResults = [];
+            
+            for (const file of files) {
+                try {
+                    const duration = await getAudioDuration(file);
+                    fileResults.push({
+                        name: file.name,
+                        size: formatFileSize(file.size),
+                        duration: formatDuration(duration),
+                        rawDuration: duration, // 保存原始时长数据
+                        success: true
+                    });
+                } catch (error) {
+                    fileResults.push({
+                        name: file.name,
+                        size: formatFileSize(file.size),
+                        error: error.message,
+                        success: false
+                    });
+                }
+            }
+            
+            displayResults(fileResults);
+        }
+
+        // 获取音频时长（高精度版本）
+        function getAudioDuration(file) {
+            return new Promise((resolve, reject) => {
+                // 尝试使用Web Audio API获取更高精度
+                if (window.AudioContext || window.webkitAudioContext) {
+                    getAudioDurationWebAudio(file)
+                        .then(resolve)
+                        .catch(() => {
+                            // 如果Web Audio API失败，回退到HTML Audio元素
+                            getAudioDurationHTML(file)
+                                .then(resolve)
+                                .catch(reject);
+                        });
+                } else {
+                    // 浏览器不支持Web Audio API，使用HTML Audio元素
+                    getAudioDurationHTML(file)
+                        .then(resolve)
+                        .catch(reject);
+                }
+            });
+        }
+        
+        // 使用Web Audio API获取高精度时长
+        function getAudioDurationWebAudio(file) {
+            return new Promise((resolve, reject) => {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const audioContext = new AudioContext();
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    audioContext.decodeAudioData(e.target.result)
+                        .then(audioBuffer => {
+                            // Web Audio API提供的时长通常更精确
+                            const duration = audioBuffer.length / audioBuffer.sampleRate;
+                            audioContext.close();
+                            resolve(duration);
+                        })
+                        .catch(error => {
+                            audioContext.close();
+                            reject(error);
+                        });
+                };
+                reader.onerror = () => reject(new Error('文件读取失败'));
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        // 使用HTML Audio元素获取时长（回退方案）
+        function getAudioDurationHTML(file) {
+            return new Promise((resolve, reject) => {
+                const audio = new Audio();
+                const url = URL.createObjectURL(file);
+                
+                audio.addEventListener('loadedmetadata', () => {
+                    URL.revokeObjectURL(url);
+                    if (isFinite(audio.duration)) {
+                        resolve(audio.duration);
+                    } else {
+                        reject(new Error('无法获取音频时长'));
+                    }
+                });
+                
+                audio.addEventListener('error', () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error('音频文件格式不支持或文件损坏'));
+                });
+                
+                audio.src = url;
+            });
+        }
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // 格式化时长
+        function formatDuration(seconds) {
+            const precisionMode = document.querySelector('input[name="precision"]:checked').value;
+            
+            if (precisionMode === 'precise') {
+                return formatDurationPrecise(seconds);
+            } else {
+                return formatDurationSimple(seconds);
+            }
+        }
+        
+        // 简单格式化时长
+        function formatDurationSimple(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            } else {
+                return `${minutes}:${secs.toString().padStart(2, '0')}`;
+            }
+        }
+        
+        // 微秒精度格式化时长
+        function formatDurationPrecise(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const wholeSecs = Math.floor(seconds % 60);
+            const microseconds = Math.floor((seconds % 1) * 1000000);
+            
+            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${wholeSecs.toString().padStart(2, '0')}.${microseconds.toString().padStart(6, '0')}`;
+        }
+
+        // 显示结果
+        function displayResults(fileResults) {
+            fileList.innerHTML = '';
+            
+            fileResults.forEach(result => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                
+                if (result.success) {
+                    const isPrecise = document.querySelector('input[name="precision"]:checked').value === 'precise';
+                    const durationClass = isPrecise ? 'duration-precise' : 'duration';
+                    const precisionInfo = isPrecise ? `<div class="file-info">原始精度: ${result.rawDuration.toFixed(10)}秒</div>` : '';
+                    fileItem.innerHTML = `
+                        <div class="file-name">📄 ${result.name}</div>
+                        <div class="file-info">文件大小: ${result.size}</div>
+                        <div class="${durationClass}">⏱️ 时长: ${result.duration}</div>
+                        ${precisionInfo}
+                    `;
+                } else {
+                    fileItem.innerHTML = `
+                        <div class="file-name">📄 ${result.name}</div>
+                        <div class="file-info">文件大小: ${result.size}</div>
+                        <div class="error">❌ 错误: ${result.error}</div>
+                    `;
+                }
+                
+                fileList.appendChild(fileItem);
+            });
+        }
+    </script>
+</body>
+</html>

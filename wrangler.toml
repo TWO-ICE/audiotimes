@@ -1,0 +1,21 @@
+name = "audio-duration-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+# API Token for authentication - set this to your desired token value
+# Example: API_TOKEN = "your-secret-token-here"
+# For security, you can also set this via wrangler secret put API_TOKEN
+API_TOKEN = "demo-token-12345"
+
+# 允许更大的请求体大小以支持音频文件上传
+# Cloudflare Workers 默认限制为 100MB
+# 实际使用中建议根据需要调整
+
+# 绑定配置（如果需要KV存储或其他服务）
+# [[kv_namespaces]]
+# binding = "AUDIO_CACHE"
+# id = "your-kv-namespace-id"
+# preview_id = "your-preview-kv-namespace-id"
