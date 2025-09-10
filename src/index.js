@@ -55,6 +55,26 @@ export default {
         return await handleAudioDuration(request);
       }
       
+      // 新增：通过URL获取音频时长的API端点
+      if (path === '/api/duration-url' && (request.method === 'POST' || request.method === 'GET')) {
+        // 验证token
+        const authResult = await validateToken(request, env);
+        if (!authResult.valid) {
+          return new Response(JSON.stringify({
+            error: 'Unauthorized',
+            message: authResult.message
+          }), {
+            status: 401,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+        
+        return await handleAudioDurationFromUrl(request);
+      }
+      
       // 根路径返回API文档
       if (path === '/' && request.method === 'GET') {
         return new Response(getApiDocumentation(), {
@@ -84,9 +104,10 @@ export default {
         error: 'Not Found',
         message: 'API endpoint not found',
         availableEndpoints: [
-          'POST /api/duration - 获取音频时长',
-          'GET /health - 健康检查',
-          'GET / - API文档'
+          'POST /api/duration - 上传音频文件获取时长',
+        'POST/GET /api/duration-url - 通过URL获取远程音频时长',
+        'GET /health - 健康检查',
+        'GET / - API文档'
         ]
       }), {
         status: 404,
@@ -111,6 +132,182 @@ export default {
     }
   }
 };
+
+/**
+ * 处理通过URL获取音频时长的请求
+ */
+async function handleAudioDurationFromUrl(request) {
+  try {
+    let audioUrl;
+    let precisionMode = 'simple';
+    
+    // 根据请求方法获取参数
+    if (request.method === 'GET') {
+      const url = new URL(request.url);
+      audioUrl = url.searchParams.get('url');
+      precisionMode = url.searchParams.get('precision') || 'simple';
+    } else if (request.method === 'POST') {
+      const contentType = request.headers.get('content-type') || '';
+      
+      if (contentType.includes('application/json')) {
+        const body = await request.json();
+        audioUrl = body.url;
+        precisionMode = body.precision || 'simple';
+      } else if (contentType.includes('multipart/form-data')) {
+        const formData = await request.formData();
+        audioUrl = formData.get('url');
+        precisionMode = formData.get('precision') || 'simple';
+      } else {
+        return new Response(JSON.stringify({
+          error: 'Bad Request',
+          message: 'Content-Type must be application/json or multipart/form-data for POST requests'
+        }), {
+          status: 400,
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders
+          }
+        });
+      }
+    }
+    
+    // 验证URL参数
+    if (!audioUrl) {
+      return new Response(JSON.stringify({
+        error: 'Bad Request',
+        message: 'Missing required parameter: url'
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+    }
+    
+    // 验证URL格式
+    const urlValidation = validateAudioUrl(audioUrl);
+    if (!urlValidation.valid) {
+      return new Response(JSON.stringify({
+        error: 'Bad Request',
+        message: urlValidation.message
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+    }
+    
+    // 下载远程音频文件
+    const downloadResult = await downloadAudioFile(audioUrl);
+    if (!downloadResult.success) {
+      return new Response(JSON.stringify({
+        error: 'Download Error',
+        message: downloadResult.message
+      }), {
+        status: downloadResult.status || 500,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+    }
+    
+    // 创建虚拟文件对象
+    const audioFile = {
+      name: getFilenameFromUrl(audioUrl),
+      type: downloadResult.contentType,
+      size: downloadResult.arrayBuffer.byteLength,
+      arrayBuffer: () => Promise.resolve(downloadResult.arrayBuffer)
+    };
+    
+    // 验证文件类型
+    if (!SUPPORTED_FORMATS.includes(audioFile.type)) {
+      return new Response(JSON.stringify({
+        error: 'Unsupported Format',
+        message: `Unsupported audio format: ${audioFile.type}`,
+        supportedFormats: SUPPORTED_FORMATS
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+    }
+    
+    // 检查文件大小（限制为50MB）
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    if (audioFile.size > maxSize) {
+      return new Response(JSON.stringify({
+        error: 'File Too Large',
+        message: `File size exceeds limit. Maximum allowed: ${formatFileSize(maxSize)}`,
+        fileSize: formatFileSize(audioFile.size)
+      }), {
+        status: 413,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+    }
+    
+    // 获取音频时长
+    const duration = await getAudioDurationFromBuffer(downloadResult.arrayBuffer, audioFile.type);
+    
+    // 转换为微秒格式 (1秒 = 1000000微秒)
+    const durationMicroseconds = Math.round(duration * 1000000);
+    
+    // 格式化时长
+    const formattedDuration = formatDuration(duration, precisionMode);
+    
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        url: audioUrl,
+        filename: audioFile.name,
+        fileSize: formatFileSize(audioFile.size),
+        mimeType: audioFile.type,
+        duration: durationMicroseconds, // 微秒格式的时长
+        formatted: formattedDuration, // 格式化后的时长字符串
+        precision: precisionMode,
+        timelines: [
+          {
+            start: 0,
+            end: durationMicroseconds
+          }
+        ],
+        all_timelines: [
+          {
+            start: 0,
+            end: durationMicroseconds
+          }
+        ],
+        timestamp: new Date().toISOString()
+      }
+    }), {
+      headers: {
+        'Content-Type': 'application/json',
+        ...corsHeaders
+      }
+    });
+    
+  } catch (error) {
+    console.error('URL audio processing error:', error);
+    return new Response(JSON.stringify({
+      error: 'Processing Error',
+      message: error.message || 'Failed to process remote audio file'
+    }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        ...corsHeaders
+      }
+    });
+  }
+}
 
 /**
  * 处理音频时长检测请求
@@ -235,6 +432,166 @@ async function handleAudioDuration(request) {
 }
 
 /**
+ * 验证音频URL
+ */
+function validateAudioUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    
+    // 检查协议
+    if (!['http:', 'https:'].includes(urlObj.protocol)) {
+      return {
+        valid: false,
+        message: 'Only HTTP and HTTPS protocols are supported'
+      };
+    }
+    
+    // 检查文件扩展名
+    const pathname = urlObj.pathname.toLowerCase();
+    const supportedExtensions = ['.mp3', '.wav', '.ogg', '.aac', '.flac', '.m4a', '.webm'];
+    const hasValidExtension = supportedExtensions.some(ext => pathname.endsWith(ext));
+    
+    if (!hasValidExtension) {
+      return {
+        valid: false,
+        message: `URL must point to a supported audio file. Supported extensions: ${supportedExtensions.join(', ')}`
+      };
+    }
+    
+    return {
+      valid: true,
+      message: 'URL is valid'
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      message: 'Invalid URL format'
+    };
+  }
+}
+
+/**
+ * 下载远程音频文件
+ */
+async function downloadAudioFile(url) {
+  try {
+    // 设置请求超时
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Audio-Duration-API/1.0'
+      }
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      return {
+        success: false,
+        message: `Failed to download file: HTTP ${response.status} ${response.statusText}`,
+        status: response.status
+      };
+    }
+    
+    // 检查Content-Type
+    const contentType = response.headers.get('content-type') || '';
+    const isAudioType = SUPPORTED_FORMATS.some(format => contentType.includes(format.split('/')[1]));
+    
+    if (!isAudioType) {
+      // 尝试根据URL扩展名推断MIME类型
+      const inferredType = inferMimeTypeFromUrl(url);
+      if (!inferredType) {
+        return {
+          success: false,
+          message: `Invalid content type: ${contentType}. Expected audio file.`,
+          status: 400
+        };
+      }
+    }
+    
+    // 检查Content-Length
+    const contentLength = response.headers.get('content-length');
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    
+    if (contentLength && parseInt(contentLength) > maxSize) {
+      return {
+        success: false,
+        message: `File too large: ${formatFileSize(parseInt(contentLength))}. Maximum allowed: ${formatFileSize(maxSize)}`,
+        status: 413
+      };
+    }
+    
+    // 下载文件内容
+    const arrayBuffer = await response.arrayBuffer();
+    
+    // 再次检查实际文件大小
+    if (arrayBuffer.byteLength > maxSize) {
+      return {
+        success: false,
+        message: `File too large: ${formatFileSize(arrayBuffer.byteLength)}. Maximum allowed: ${formatFileSize(maxSize)}`,
+        status: 413
+      };
+    }
+    
+    return {
+      success: true,
+      arrayBuffer: arrayBuffer,
+      contentType: contentType || inferMimeTypeFromUrl(url) || 'audio/mpeg'
+    };
+    
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      return {
+        success: false,
+        message: 'Download timeout (30 seconds)',
+        status: 408
+      };
+    }
+    
+    return {
+      success: false,
+      message: `Download failed: ${error.message}`,
+      status: 500
+    };
+  }
+}
+
+/**
+ * 从URL推断MIME类型
+ */
+function inferMimeTypeFromUrl(url) {
+  const pathname = url.toLowerCase();
+  
+  if (pathname.endsWith('.mp3')) return 'audio/mpeg';
+  if (pathname.endsWith('.wav')) return 'audio/wav';
+  if (pathname.endsWith('.ogg')) return 'audio/ogg';
+  if (pathname.endsWith('.aac')) return 'audio/aac';
+  if (pathname.endsWith('.flac')) return 'audio/flac';
+  if (pathname.endsWith('.m4a')) return 'audio/mp4';
+  if (pathname.endsWith('.webm')) return 'audio/webm';
+  
+  return null;
+}
+
+/**
+ * 从URL提取文件名
+ */
+function getFilenameFromUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    const filename = pathname.split('/').pop() || 'audio';
+    return filename;
+  } catch (error) {
+    return 'audio';
+  }
+}
+
+/**
  * 获取音频时长（移植自HTML工具的逻辑）
  * 在Cloudflare Workers环境中，我们需要使用Web Audio API的替代方案
  */
@@ -254,6 +611,27 @@ async function getAudioDuration(file) {
     } else {
       // 对于其他格式，尝试通用解析
       return await parseGenericAudioDuration(arrayBuffer, file.type);
+    }
+  } catch (error) {
+    throw new Error(`Failed to parse audio duration: ${error.message}`);
+  }
+}
+
+/**
+ * 从ArrayBuffer获取音频时长（用于URL下载的文件）
+ */
+async function getAudioDurationFromBuffer(arrayBuffer, mimeType) {
+  try {
+    // 尝试解析不同格式的音频文件
+    if (mimeType.includes('mp3') || mimeType.includes('mpeg')) {
+      return await parseMp3Duration(arrayBuffer);
+    } else if (mimeType.includes('wav')) {
+      return await parseWavDuration(arrayBuffer);
+    } else if (mimeType.includes('ogg')) {
+      return await parseOggDuration(arrayBuffer);
+    } else {
+      // 对于其他格式，尝试通用解析
+      return await parseGenericAudioDuration(arrayBuffer, mimeType);
     }
   } catch (error) {
     throw new Error(`Failed to parse audio duration: ${error.message}`);
@@ -542,6 +920,64 @@ function getApiDocumentation() {
     </div>
     
     <div class="endpoint">
+        <h3><span class="method get">GET</span> <span class="method post">POST</span> /api/duration-url</h3>
+        <p>通过URL获取远程音频时长信息（微秒精度）</p>
+        
+        <h4>🔐 认证要求：</h4>
+        <p>此接口需要API Token认证。请在请求头中提供以下任一方式：</p>
+        <ul>
+            <li><code>Authorization: Bearer your-token</code></li>
+            <li><code>X-API-Token: your-token</code></li>
+        </ul>
+        
+        <h4>请求参数：</h4>
+        <ul>
+            <li><code>url</code> (string, required): 音频文件URL</li>
+            <li><code>precision</code> (string, optional): 精度模式，"simple" 或 "precise"，默认为 "simple"</li>
+        </ul>
+        
+        <h4>请求方式：</h4>
+        <ul>
+            <li><strong>GET:</strong> 通过URL参数传递 <code>?url=https://example.com/audio.mp3</code></li>
+            <li><strong>POST (JSON):</strong> <code>{"url": "https://example.com/audio.mp3"}</code></li>
+            <li><strong>POST (Form):</strong> 表单数据格式</li>
+        </ul>
+        
+        <h4>支持的音频格式：</h4>
+        <p>MP3, WAV, OGG, AAC, FLAC, WebM, M4A</p>
+        
+        <h4>文件大小限制：</h4>
+        <p>最大 50MB，下载超时 30秒</p>
+        
+        <h4>响应示例：</h4>
+        <pre>{
+  "success": true,
+  "data": {
+    "url": "https://example.com/audio.mp3",
+    "filename": "audio.mp3",
+    "fileSize": "3.2 MB",
+    "mimeType": "audio/mpeg",
+    "duration": 185123456,
+    "formatted": "3:05",
+    "precision": "simple",
+    "timelines": [
+      {
+        "start": 0,
+        "end": 185123456
+      }
+    ],
+    "all_timelines": [
+      {
+        "start": 0,
+        "end": 185123456
+      }
+    ],
+    "timestamp": "2024-01-01T12:00:00.000Z"
+  }
+}</pre>
+    </div>
+    
+    <div class="endpoint">
         <h3><span class="method get">GET</span> /health</h3>
         <p>健康检查端点</p>
     </div>
@@ -577,19 +1013,31 @@ fetch('/api/duration', {
 .then(response => response.json())
 .then(data => console.log(data));</pre>
     
-    <pre># cURL 示例（使用Bearer Token）
+    <pre># 上传文件获取时长（使用Bearer Token）
 curl -X POST \
   -H "Authorization: Bearer your-api-token" \
   -F "audio=@example.mp3" \
   -F "precision=precise" \
   https://your-worker.your-subdomain.workers.dev/api/duration</pre>
   
-    <pre># cURL 示例（使用X-API-Token）
+    <pre># 上传文件获取时长（使用X-API-Token）
 curl -X POST \
   -H "X-API-Token: your-api-token" \
   -F "audio=@example.mp3" \
   -F "precision=precise" \
   https://your-worker.your-subdomain.workers.dev/api/duration</pre>
+  
+    <pre># 通过URL获取音频时长（POST JSON）
+curl -X POST \
+  -H "Authorization: Bearer your-api-token" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/sample.mp3", "precision": "precise"}' \
+  https://your-worker.your-subdomain.workers.dev/api/duration-url</pre>
+  
+    <pre># 通过URL获取音频时长（GET）
+curl -X GET \
+  -H "Authorization: Bearer your-api-token" \
+  "https://your-worker.your-subdomain.workers.dev/api/duration-url?url=https://example.com/sample.mp3&precision=precise"</pre>
   
     <h4>🔧 Token配置说明：</h4>
     <p>管理员可以通过以下方式配置API Token：</p>

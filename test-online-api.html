@@ -215,6 +215,21 @@
             <input type="file" id="fileInput" accept="audio/*" multiple>
         </div>
         
+        <div class="api-info" style="background: #fff3cd; border: 1px solid #ffeaa7;">
+            <h3>🌐 通过URL获取音频时长</h3>
+            <p>输入音频文件的URL地址，支持HTTP/HTTPS协议</p>
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <input type="url" id="urlInput" placeholder="https://example.com/audio.mp3" 
+                       style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                <button class="upload-btn" onclick="processUrlAudio()" style="margin: 0;">
+                    获取时长
+                </button>
+            </div>
+            <small style="color: #856404; display: block; margin-top: 5px;">
+                支持格式: MP3, WAV, OGG, AAC, FLAC, M4A, WebM | 最大文件: 50MB | 超时: 30秒
+            </small>
+        </div>
+        
         <div class="results" id="results">
             <h3>检测结果:</h3>
             <div id="resultList"></div>
@@ -289,7 +304,95 @@
             displayResults(fileResults);
         }
 
-        // 调用API
+        // 处理URL音频
+        async function processUrlAudio() {
+            const urlInput = document.getElementById('urlInput');
+            const audioUrl = urlInput.value.trim();
+            
+            if (!audioUrl) {
+                alert('请输入音频文件URL');
+                return;
+            }
+            
+            results.style.display = 'block';
+            resultList.innerHTML = '<div class="loading">正在从URL获取音频时长...</div>';
+            
+            const precision = document.querySelector('input[name="precision"]:checked').value;
+            
+            try {
+                const result = await callAudioDurationFromUrl(audioUrl, precision);
+                displayResults([{
+                    name: result.data.filename || 'URL音频文件',
+                    success: true,
+                    data: result.data,
+                    response: result,
+                    isUrl: true,
+                    url: audioUrl
+                }]);
+            } catch (error) {
+                displayResults([{
+                    name: 'URL音频文件',
+                    success: false,
+                    error: error.message,
+                    details: error.details,
+                    isUrl: true,
+                    url: audioUrl
+                }]);
+            }
+        }
+        
+        // 调用URL API
+        async function callAudioDurationFromUrl(url, precision) {
+            // 获取token输入值
+            const token = document.getElementById('tokenInput').value.trim();
+            
+            // 构建请求头
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (token) {
+                headers['X-API-Token'] = token;
+            }
+            
+            const apiUrlEndpoint = apiEndpoint.replace('/api/duration', '/api/duration-url');
+            
+            const response = await fetch(apiUrlEndpoint, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    url: url,
+                    precision: precision
+                })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                let errorMessage = result.message || `HTTP ${response.status}`;
+                if (response.status === 401) {
+                    errorMessage = '🔐 Token认证失败，请检查token是否正确或联系管理员';
+                } else if (response.status === 400) {
+                    errorMessage = '❌ URL无效或文件格式不支持: ' + (result.message || '请检查URL格式');
+                } else if (response.status === 413) {
+                    errorMessage = '📦 文件过大: ' + (result.message || '文件超过50MB限制');
+                } else if (response.status === 408) {
+                    errorMessage = '⏰ 下载超时: ' + (result.message || '下载时间超过30秒');
+                }
+                throw new Error(errorMessage, {
+                    details: result
+                });
+            }
+
+            if (!result.success) {
+                throw new Error(result.message || 'API调用失败', {
+                    details: result
+                });
+            }
+
+            return result;
+        }
+
+        // 调用文件上传API
         async function callAudioDurationAPI(file, precision) {
             const formData = new FormData();
             formData.append('audio', file);
@@ -342,24 +445,30 @@
                 if (result.success) {
                     const data = result.data;
                     const durationSeconds = (data.duration / 1000000).toFixed(6);
+                    const isUrlResult = result.isUrl;
+                    
                     resultItem.innerHTML = `
-                        <h4>📄 ${result.name}</h4>
-                        <p><strong>文件大小:</strong> ${data.fileSize}</p>
-                        <p><strong>MIME类型:</strong> ${data.mimeType}</p>
+                        <h4>${isUrlResult ? '🌐' : '📄'} ${result.name}</h4>
+                        ${isUrlResult ? `<p><strong>源URL:</strong> <a href="${result.url}" target="_blank" style="color: #007bff; word-break: break-all;">${result.url}</a></p>` : ''}
+                        <p><strong>文件大小:</strong> ${data.fileSize || data.file_size || 'N/A'}</p>
+                        <p><strong>MIME类型:</strong> ${data.mimeType || data.mime_type || 'N/A'}</p>
                         <p><strong>格式化时长:</strong> ${data.formatted}</p>
                         <p><strong>时长(微秒):</strong> ${data.duration.toLocaleString()}</p>
                         <p><strong>时长(秒):</strong> ${durationSeconds} 秒</p>
                         <p><strong>精度模式:</strong> ${data.precision}</p>
                         <p><strong>时间轴:</strong> ${data.timelines[0].start} - ${data.timelines[0].end} 微秒</p>
                         <p><strong>处理时间:</strong> ${data.timestamp}</p>
+                        ${isUrlResult ? `<p><strong>处理方式:</strong> 远程URL下载</p>` : `<p><strong>处理方式:</strong> 文件上传</p>`}
                         <details>
                             <summary>完整API响应</summary>
                             <pre>${JSON.stringify(result.response, null, 2)}</pre>
                         </details>
                     `;
                 } else {
+                    const isUrlResult = result.isUrl;
                     resultItem.innerHTML = `
-                        <h4>📄 ${result.name}</h4>
+                        <h4>${isUrlResult ? '🌐' : '📄'} ${result.name}</h4>
+                        ${isUrlResult ? `<p><strong>源URL:</strong> <span style="color: #dc3545; word-break: break-all;">${result.url}</span></p>` : ''}
                         <p><strong>❌ 错误:</strong> ${result.error}</p>
                         ${result.details ? `
                         <details>

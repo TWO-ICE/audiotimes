@@ -10,6 +10,7 @@
 ## ✨ 功能特性
 
 - 🎧 **多格式支持**: MP3、WAV、M4A、FLAC、AAC、OGG等主流音频格式
+- 🌐 **URL支持**: 支持通过URL直接获取远程音频文件时长
 - ⚡ **高性能**: 基于音频文件头部解析，无需完整下载文件
 - 🔒 **安全认证**: 支持Token认证，保护API访问
 - 🌍 **多平台部署**: 支持Cloudflare Workers和Vercel Edge Functions
@@ -106,7 +107,7 @@ npm run dev:vercel
 
 ### 端点列表
 
-#### 1. 获取音频时长
+#### 1. 上传文件获取音频时长
 
 **POST** `/api/duration`
 
@@ -140,7 +141,71 @@ Content-Type: multipart/form-data
 }
 ```
 
-#### 2. 健康检查
+#### 2. 通过URL获取音频时长
+
+**POST/GET** `/api/duration-url`
+
+通过音频文件URL获取时长信息，无需上传文件。
+
+**请求头**
+```http
+Authorization: Bearer your_token_here
+# 或者
+X-API-Token: your_token_here
+Content-Type: application/json  # POST请求
+```
+
+**请求参数**
+
+**GET请求**：
+- `url` (string, required): 音频文件URL
+- `precision` (string, optional): 精度模式 (simple/precise)
+
+**POST请求**：
+```json
+{
+  "url": "https://example.com/audio.mp3",
+  "precision": "simple"
+}
+```
+
+**响应示例**
+```json
+{
+  "success": true,
+  "data": {
+    "sourceUrl": "https://example.com/audio.mp3",
+    "filename": "audio.mp3",
+    "fileSize": "4.6 MB",
+    "mimeType": "audio/mpeg",
+    "duration": 120061438,
+    "formatted": "2:00",
+    "precision": "simple",
+    "timelines": [
+      {
+        "start": 0,
+        "end": 120061438
+      }
+    ],
+    "all_timelines": [
+      {
+        "start": 0,
+        "end": 120061438
+      }
+    ],
+    "timestamp": "2024-01-15T10:30:00.000Z"
+  }
+}
+```
+
+**支持的URL格式**：
+- HTTP/HTTPS协议
+- 直接链接到音频文件
+- 文件扩展名：.mp3, .wav, .ogg, .aac, .m4a, .flac, .webm
+- 文件大小限制：50MB
+- 下载超时：30秒
+
+#### 3. 健康检查
 
 **GET** `/api/health`
 
@@ -165,6 +230,7 @@ Content-Type: multipart/form-data
 
 #### cURL 示例
 
+**文件上传方式**：
 ```bash
 # 使用 Authorization header
 curl -X POST "https://your-domain.com/api/duration" \
@@ -177,8 +243,22 @@ curl -X POST "https://your-domain.com/api/duration" \
   -F "audio=@/path/to/your/audio.mp3"
 ```
 
+**URL方式**：
+```bash
+# GET请求
+curl -X GET "https://your-domain.com/api/duration-url?url=https://example.com/audio.mp3&precision=simple" \
+  -H "Authorization: Bearer your_token_here"
+
+# POST请求
+curl -X POST "https://your-domain.com/api/duration-url" \
+  -H "Authorization: Bearer your_token_here" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/audio.mp3", "precision": "simple"}'
+```
+
 #### JavaScript 示例
 
+**文件上传方式**：
 ```javascript
 const formData = new FormData();
 formData.append('audio', audioFile);
@@ -192,7 +272,49 @@ fetch('https://your-domain.com/api/duration', {
 })
 .then(response => response.json())
 .then(data => {
-  console.log('音频时长:', data.data.duration_seconds, '秒');
+  console.log('音频时长:', data.data.duration, '微秒');
+})
+.catch(error => {
+  console.error('错误:', error);
+});
+```
+
+**URL方式**：
+```javascript
+// GET请求
+const audioUrl = 'https://example.com/audio.mp3';
+const apiUrl = `https://your-domain.com/api/duration-url?url=${encodeURIComponent(audioUrl)}&precision=simple`;
+
+fetch(apiUrl, {
+  method: 'GET',
+  headers: {
+    'Authorization': 'Bearer your_token_here'
+  }
+})
+.then(response => response.json())
+.then(data => {
+  console.log('音频时长:', data.data.formatted);
+  console.log('文件大小:', data.data.fileSize);
+})
+.catch(error => {
+  console.error('错误:', error);
+});
+
+// POST请求
+fetch('https://your-domain.com/api/duration-url', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer your_token_here',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    url: 'https://example.com/audio.mp3',
+    precision: 'simple'
+  })
+})
+.then(response => response.json())
+.then(data => {
+  console.log('音频信息:', data.data);
 })
 .catch(error => {
   console.error('错误:', error);
@@ -201,17 +323,71 @@ fetch('https://your-domain.com/api/duration', {
 
 #### Python 示例
 
+**文件上传方式**：
 ```python
 import requests
 
-url = 'https://your-domain.com/api/duration'
-headers = {'Authorization': 'Bearer your_token_here'}
-files = {'audio': open('audio.mp3', 'rb')}
+url = "https://your-domain.com/api/duration"
+headers = {
+    "Authorization": "Bearer your_token_here"
+}
 
-response = requests.post(url, headers=headers, files=files)
-data = response.json()
+with open("audio.mp3", "rb") as f:
+    files = {"audio": f}
+    response = requests.post(url, headers=headers, files=files)
+    
+if response.status_code == 200:
+    data = response.json()
+    print(f"音频时长: {data['data']['duration']} 微秒")
+    print(f"格式化时长: {data['data']['formatted']}")
+else:
+    print(f"错误: {response.status_code}")
+```
 
-print(f"音频时长: {data['data']['duration_seconds']} 秒")
+**URL方式**：
+```python
+import requests
+
+# GET请求
+url = "https://your-domain.com/api/duration-url"
+headers = {
+    "Authorization": "Bearer your_token_here"
+}
+params = {
+    "url": "https://example.com/audio.mp3",
+    "precision": "simple"
+}
+
+response = requests.get(url, headers=headers, params=params)
+
+if response.status_code == 200:
+    data = response.json()
+    print(f"音频时长: {data['data']['formatted']}")
+    print(f"文件大小: {data['data']['fileSize']}")
+    print(f"MIME类型: {data['data']['mimeType']}")
+else:
+    print(f"错误: {response.status_code}")
+
+# POST请求
+import json
+
+url = "https://your-domain.com/api/duration-url"
+headers = {
+    "Authorization": "Bearer your_token_here",
+    "Content-Type": "application/json"
+}
+data = {
+    "url": "https://example.com/audio.mp3",
+    "precision": "simple"
+}
+
+response = requests.post(url, headers=headers, json=data)
+
+if response.status_code == 200:
+    result = response.json()
+    print(f"音频信息: {result['data']}")
+else:
+    print(f"错误: {response.status_code}")
 ```
 
 ## ⚙️ 环境变量配置
@@ -254,6 +430,9 @@ API_TOKEN=your_secret_token_here
 - **Token 认证**: 所有API请求都需要有效的Token
 - **CORS 配置**: 合理的跨域资源共享配置
 - **文件验证**: 严格的文件格式和大小验证
+- **文件大小限制**: 防止过大文件上传导致的资源消耗（上传50MB，URL下载50MB）
+- **URL验证**: 验证URL格式和协议，仅支持HTTP/HTTPS
+- **下载超时**: URL下载设置30秒超时，防止长时间占用资源
 - **错误处理**: 安全的错误信息返回
 
 ## 📊 性能特点
@@ -306,16 +485,34 @@ audio-duration-api/
 ## 🙋‍♂️ 常见问题
 
 ### Q: 支持的最大文件大小是多少？
-A: 默认支持最大 100MB 的音频文件。可以通过修改配置调整限制。
+A: 默认支持最大50MB的音频文件（包括上传和URL下载）。如需调整，可以修改配置中的 `MAX_FILE_SIZE` 参数。
 
-### Q: 如何获取更精确的时长？
-A: API 返回微秒级精度的时长信息，可以根据需要进行格式化。
+### Q: 时长精度如何？
+A: 提供两种精度模式：
+- `simple`: 快速模式，精度约为秒级
+- `precise`: 精确模式，精度可达毫秒级
 
-### Q: 是否支持流媒体URL？
-A: 目前仅支持文件上传，不支持直接解析流媒体URL。
+### Q: URL功能支持哪些类型的链接？
+A: 支持：
+- HTTP/HTTPS协议的直接音频文件链接
+- 常见音频格式：MP3、WAV、OGG、AAC、M4A、FLAC、WEBM
+- 文件大小限制：50MB
+- 下载超时：30秒
+
+不支持：
+- 流媒体URL（如直播流）
+- 需要特殊认证的URL
+- 重定向次数过多的URL
 
 ### Q: 如何处理损坏的音频文件？
-A: API 会返回相应的错误信息，建议在客户端进行文件验证。
+A: API会返回相应的错误信息，建议在客户端进行适当的错误处理。
+
+### Q: URL下载失败怎么办？
+A: 常见原因及解决方案：
+- **404错误**: 检查URL是否正确，文件是否存在
+- **超时错误**: 文件过大或网络较慢，可尝试使用文件上传方式
+- **格式不支持**: 确认文件扩展名在支持列表中
+- **文件过大**: 确保文件小于50MB
 
 ## 📞 联系方式
 
