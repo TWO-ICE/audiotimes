@@ -260,6 +260,9 @@ async function handleAudioDurationFromUrl(request) {
     // 转换为微秒格式 (1秒 = 1000000微秒)
     const durationMicroseconds = Math.round(duration * 1000000);
     
+    // 计算向上取整到小数点后1位的时长
+    const durationRounded = Math.ceil(duration * 10) / 10;
+    
     // 格式化时长
     const formattedDuration = formatDuration(duration, precisionMode);
     
@@ -271,6 +274,7 @@ async function handleAudioDurationFromUrl(request) {
         fileSize: formatFileSize(audioFile.size),
         mimeType: audioFile.type,
         duration: durationMicroseconds, // 微秒格式的时长
+        duration_rounded: durationRounded, // 向上取整到小数点后1位的时长（秒）
         formatted: formattedDuration, // 格式化后的时长字符串
         precision: precisionMode,
         timelines: [
@@ -383,6 +387,9 @@ async function handleAudioDuration(request) {
     // 转换为微秒格式 (1秒 = 1000000微秒)
     const durationMicroseconds = Math.round(duration * 1000000);
     
+    // 计算向上取整到小数点后1位的时长
+    const durationRounded = Math.ceil(duration * 10) / 10;
+    
     // 格式化时长
     const formattedDuration = formatDuration(duration, precisionMode);
     
@@ -393,6 +400,7 @@ async function handleAudioDuration(request) {
         fileSize: formatFileSize(audioFile.size),
         mimeType: audioFile.type,
         duration: durationMicroseconds, // 微秒格式的时长
+        duration_rounded: durationRounded, // 向上取整到小数点后1位的时长（秒）
         formatted: formattedDuration, // 格式化后的时长字符串
         precision: precisionMode,
         timelines: [
@@ -644,20 +652,41 @@ async function getAudioDurationFromBuffer(arrayBuffer, mimeType) {
 async function parseMp3Duration(arrayBuffer) {
   const view = new DataView(arrayBuffer);
   
-  // 查找第一个MP3帧头
-  for (let i = 0; i < view.byteLength - 4; i++) {
+  // 查找ID3v2标签（如果存在）
+  let dataStart = 0;
+  if (view.getUint8(0) === 0x49 && view.getUint8(1) === 0x44 && view.getUint8(2) === 0x33) {
+    // ID3v2标签存在，跳过它
+    const tagSize = ((view.getUint8(6) & 0x7F) << 21) |
+                   ((view.getUint8(7) & 0x7F) << 14) |
+                   ((view.getUint8(8) & 0x7F) << 7) |
+                   (view.getUint8(9) & 0x7F);
+    dataStart = 10 + tagSize;
+  }
+  
+  // 查找ID3v1标签（文件末尾128字节）
+  let dataEnd = arrayBuffer.byteLength;
+  if (arrayBuffer.byteLength >= 128) {
+    const tagStart = arrayBuffer.byteLength - 128;
+    const tagHeader = String.fromCharCode(...new Uint8Array(arrayBuffer, tagStart, 3));
+    if (tagHeader === 'TAG') {
+      dataEnd = tagStart;
+    }
+  }
+  
+  // 查找第一个有效的MP3帧头
+  for (let i = dataStart; i < Math.min(dataStart + 8192, view.byteLength - 4); i++) {
     if (view.getUint8(i) === 0xFF && (view.getUint8(i + 1) & 0xE0) === 0xE0) {
-      // 找到帧头，解析帧信息
       const header = view.getUint32(i, false);
       const frameInfo = parseMp3FrameHeader(header);
       
-      if (frameInfo) {
-        // 修复时长计算公式
-        const bitrate = frameInfo.bitrate; // bps
-        const fileSize = arrayBuffer.byteLength; // bytes
+      if (frameInfo && frameInfo.bitrate > 0 && frameInfo.sampleRate > 0) {
+        // 计算实际音频数据大小
+        const audioDataSize = dataEnd - dataStart;
         
-        // 正确的时长计算：文件大小(字节) / (比特率(bps) / 8) = 秒数
-        const duration = fileSize / (bitrate / 8);
+        // 使用比特率计算时长（更准确的方法）
+        // 时长 = 音频数据大小(字节) * 8 / 比特率(bps)
+        const duration = (audioDataSize * 8) / frameInfo.bitrate;
+        
         return duration;
       }
     }
@@ -714,11 +743,9 @@ async function parseWavDuration(arrayBuffer) {
 }
 
 /**
- * 解析OGG文件时长（简化版）
+ * 解析OGG文件时长
  */
 async function parseOggDuration(arrayBuffer) {
-  // OGG格式比较复杂，这里提供一个简化的实现
-  // 实际应用中可能需要更完整的OGG解析器
   const view = new DataView(arrayBuffer);
   
   // 检查OGG文件头
@@ -727,68 +754,258 @@ async function parseOggDuration(arrayBuffer) {
     throw new Error('Invalid OGG file format');
   }
   
-  // 简单估算（基于文件大小和平均比特率）
-  // 这是一个粗略的估算，实际应用中需要解析OGG页面结构
-  const estimatedBitrate = 128000; // 假设128kbps
-  const fileSize = arrayBuffer.byteLength; // bytes
+  // 查找最后一个OGG页面来获取总样本数
+  let lastGranulePosition = 0;
+  let sampleRate = 48000; // 默认采样率
   
-  // 修复时长计算：文件大小(字节) / (比特率(bps) / 8) = 秒数
-  const duration = fileSize / (estimatedBitrate / 8);
+  // 从文件末尾向前搜索最后一个OGG页面
+  for (let i = view.byteLength - 65536; i >= 0; i -= 1024) {
+    const searchStart = Math.max(0, i);
+    const searchEnd = Math.min(view.byteLength - 4, searchStart + 65536);
+    
+    for (let j = searchEnd - 4; j >= searchStart; j--) {
+      if (view.getUint8(j) === 0x4F && view.getUint8(j + 1) === 0x67 && 
+          view.getUint8(j + 2) === 0x67 && view.getUint8(j + 3) === 0x53) {
+        // 找到OGG页面头
+        if (j + 26 < view.byteLength) {
+          // 读取granule position（8字节，小端序）
+          const granuleLow = view.getUint32(j + 6, true);
+          const granuleHigh = view.getUint32(j + 10, true);
+          const granulePosition = granuleLow + (granuleHigh * 0x100000000);
+          
+          if (granulePosition > lastGranulePosition) {
+            lastGranulePosition = granulePosition;
+          }
+        }
+      }
+    }
+    
+    if (lastGranulePosition > 0) break;
+  }
   
-  return duration;
+  // 尝试从Vorbis头部获取采样率
+  for (let i = 0; i < Math.min(8192, view.byteLength - 30); i++) {
+    if (view.getUint8(i) === 0x01 && 
+        String.fromCharCode(...new Uint8Array(arrayBuffer, i + 1, 6)) === 'vorbis') {
+      // 找到Vorbis识别头
+      if (i + 15 < view.byteLength) {
+        sampleRate = view.getUint32(i + 12, true);
+        break;
+      }
+    }
+  }
+  
+  if (lastGranulePosition > 0 && sampleRate > 0) {
+    // 计算时长：总样本数 / 采样率
+    const duration = lastGranulePosition / sampleRate;
+    return duration;
+  }
+  
+  throw new Error('Could not determine OGG file duration');
 }
 
 /**
  * 通用音频时长解析（回退方案）
  */
 async function parseGenericAudioDuration(arrayBuffer, mimeType) {
-  // 对于不支持的格式，提供一个基于文件大小的粗略估算
-  // 这不是准确的方法，但可以作为最后的回退方案
+  // 尝试解析不同格式的音频文件
   
-  let estimatedBitrate;
-  
-  // 根据文件类型估算比特率
   if (mimeType.includes('flac')) {
-    estimatedBitrate = 1000000; // 1Mbps for FLAC
-  } else if (mimeType.includes('aac') || mimeType.includes('m4a')) {
-    estimatedBitrate = 128000; // 128kbps for AAC
+    return await parseFlacDuration(arrayBuffer);
+  } else if (mimeType.includes('aac') || mimeType.includes('m4a') || mimeType.includes('mp4')) {
+    return await parseM4aDuration(arrayBuffer);
   } else {
-    estimatedBitrate = 192000; // 192kbps default
+    // 最后的回退方案：基于平均比特率的估算
+    // 这不是准确的方法，但总比返回文件大小好
+    const estimatedBitrate = 128000; // 128kbps
+    const fileSize = arrayBuffer.byteLength;
+    
+    // 估算时长：文件大小(字节) * 8 / 比特率(bps)
+    const duration = (fileSize * 8) / estimatedBitrate;
+    return duration;
   }
-  
-  const fileSize = arrayBuffer.byteLength; // bytes
-  
-  // 修复时长计算：文件大小(字节) / (比特率(bps) / 8) = 秒数
-  const duration = fileSize / (estimatedBitrate / 8);
-  return duration;
 }
 
 /**
  * 解析MP3帧头信息
  */
 function parseMp3FrameHeader(header) {
-  // MP3帧头解析（简化版）
   const version = (header >> 19) & 3;
   const layer = (header >> 17) & 3;
   const bitrateIndex = (header >> 12) & 15;
   const sampleRateIndex = (header >> 10) & 3;
+  const padding = (header >> 9) & 1;
   
-  // 比特率表（MPEG-1 Layer III）
-  const bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
-  const sampleRates = [44100, 48000, 32000, 0];
+  // MPEG版本和层级检查
+  if (version === 1 || layer === 0) return null; // 保留值
   
-  if (bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
-    return null; // 无效帧
+  // 比特率表
+  const bitrateTables = {
+    1: { // MPEG-1
+      1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0], // Layer I
+      2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0],   // Layer II
+      3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]     // Layer III
+    },
+    2: { // MPEG-2
+      1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0],
+      2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+      3: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+    }
+  };
+  
+  // 采样率表
+  const sampleRateTables = {
+    1: [44100, 48000, 32000, 0], // MPEG-1
+    2: [22050, 24000, 16000, 0], // MPEG-2
+    3: [11025, 12000, 8000, 0]   // MPEG-2.5
+  };
+  
+  const mpegVersion = version === 3 ? 1 : (version === 2 ? 2 : version);
+  const layerNum = 4 - layer;
+  
+  if (!bitrateTables[mpegVersion] || !bitrateTables[mpegVersion][layerNum]) {
+    return null;
   }
   
-  const bitrate = bitrates[bitrateIndex];
-  const sampleRate = sampleRates[sampleRateIndex];
+  if (bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+    return null;
+  }
+  
+  const bitrate = bitrateTables[mpegVersion][layerNum][bitrateIndex];
+  const sampleRate = sampleRateTables[mpegVersion][sampleRateIndex];
+  
+  if (!bitrate || !sampleRate) return null;
+  
+  // 计算帧大小
+  let frameSize;
+  let samplesPerFrame;
+  
+  if (layerNum === 1) {
+    frameSize = Math.floor((12 * bitrate * 1000 / sampleRate + padding) * 4);
+    samplesPerFrame = 384;
+  } else {
+    frameSize = Math.floor(144 * bitrate * 1000 / sampleRate + padding);
+    samplesPerFrame = mpegVersion === 1 ? 1152 : 576;
+  }
   
   return {
     bitrate: bitrate * 1000,
     sampleRate: sampleRate,
-    frameSize: Math.floor((144 * bitrate * 1000) / sampleRate)
+    frameSize: frameSize,
+    samplesPerFrame: samplesPerFrame,
+    version: mpegVersion,
+    layer: layerNum
   };
+}
+
+/**
+ * 解析FLAC文件时长
+ */
+async function parseFlacDuration(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  
+  // 检查FLAC文件头
+  const flacSignature = String.fromCharCode(...new Uint8Array(arrayBuffer, 0, 4));
+  if (flacSignature !== 'fLaC') {
+    throw new Error('Invalid FLAC file format');
+  }
+  
+  // 查找STREAMINFO元数据块
+  let offset = 4;
+  while (offset < view.byteLength - 4) {
+    const blockHeader = view.getUint8(offset);
+    const blockType = blockHeader & 0x7F;
+    const isLast = (blockHeader & 0x80) !== 0;
+    const blockSize = (view.getUint8(offset + 1) << 16) |
+                     (view.getUint8(offset + 2) << 8) |
+                     view.getUint8(offset + 3);
+    
+    if (blockType === 0) { // STREAMINFO块
+      if (offset + 4 + 18 <= view.byteLength) {
+        // 读取采样率（20位，从字节10开始）
+        const sampleRateHigh = view.getUint16(offset + 14, false);
+        const sampleRateLow = view.getUint8(offset + 16);
+        const sampleRate = (sampleRateHigh << 4) | (sampleRateLow >> 4);
+        
+        // 读取总样本数（36位，从字节14的低4位开始）
+        const totalSamplesHigh = (sampleRateLow & 0x0F) << 32;
+        const totalSamplesLow = view.getUint32(offset + 17, false);
+        const totalSamples = totalSamplesHigh + totalSamplesLow;
+        
+        if (sampleRate > 0 && totalSamples > 0) {
+          const duration = totalSamples / sampleRate;
+          return duration;
+        }
+      }
+      break;
+    }
+    
+    offset += 4 + blockSize;
+    if (isLast) break;
+  }
+  
+  throw new Error('Could not find FLAC STREAMINFO block');
+}
+
+/**
+ * 解析M4A/AAC文件时长
+ */
+async function parseM4aDuration(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  
+  // 查找mvhd atom来获取时长信息
+  let duration = 0;
+  let timeScale = 1;
+  
+  // 递归查找atoms
+  function findAtom(offset, targetAtom, maxDepth = 10) {
+    if (maxDepth <= 0 || offset >= view.byteLength - 8) return null;
+    
+    while (offset < view.byteLength - 8) {
+      const atomSize = view.getUint32(offset, false);
+      const atomType = String.fromCharCode(...new Uint8Array(arrayBuffer, offset + 4, 4));
+      
+      if (atomSize < 8) break;
+      
+      if (atomType === targetAtom) {
+        return { offset: offset + 8, size: atomSize - 8 };
+      }
+      
+      // 对于容器atom，递归搜索
+      if (['moov', 'trak', 'mdia'].includes(atomType)) {
+        const result = findAtom(offset + 8, targetAtom, maxDepth - 1);
+        if (result) return result;
+      }
+      
+      offset += atomSize;
+    }
+    
+    return null;
+  }
+  
+  // 查找mvhd atom
+  const mvhdAtom = findAtom(0, 'mvhd');
+  if (mvhdAtom && mvhdAtom.size >= 24) {
+    const mvhdOffset = mvhdAtom.offset;
+    const version = view.getUint8(mvhdOffset);
+    
+    if (version === 0) {
+      // 版本0：32位时间值
+      timeScale = view.getUint32(mvhdOffset + 12, false);
+      duration = view.getUint32(mvhdOffset + 16, false);
+    } else if (version === 1) {
+      // 版本1：64位时间值
+      timeScale = view.getUint32(mvhdOffset + 20, false);
+      // 读取64位duration（简化处理，只读取低32位）
+      duration = view.getUint32(mvhdOffset + 28, false);
+    }
+  }
+  
+  if (duration > 0 && timeScale > 0) {
+    return duration / timeScale;
+  }
+  
+  throw new Error('Could not determine M4A/AAC file duration');
 }
 
 /**
